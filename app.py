@@ -39,15 +39,17 @@ PROMPT_CONTEXT_PYTHON = """
 *Introduction*
 We handle personal financial transactions, helping users analyze and gain insights from their data.
 
-Here are the descriptors of each transaction:
-- date (string, YYYY-MM-DD): Transaction date.
-- account_id (string): Account identifier.
-- category (string): User-defined transaction type (e.g., 'Food', 'Leisure'). Users typically have 10-40 categories.
-- merchant (string): Merchant name (e.g., 'AMAZON', 'APPLE').
-- transaction_type (string): 'income' or 'outcome'.
-- currency (string): Transaction currency code (e.g., 'USD', 'EUR', 'GBP').
-- amount (float): Transaction amount in the original currency (non-negative). If asked about original transactions, make sure to user original amount, i.e. amount.
-- amount_uc (float): Transaction amount in the user's default currency (non-negative). If asked about general information/statistics on user's transactions, make sure to use amount in user's default currency, i.e. amount_uc.
+Here are the descriptors of each transaction (accessed via dot notation):
+- date (string, YYYY-MM-DD): Transaction date. Access as: transaction.date
+- account (string): Account identifier. Access as: transaction.account
+- category (string): User-defined transaction type. Access as: transaction.category
+- merchant (string): Merchant name. Access as: transaction.merchant
+- transaction_type (string): 'income' or 'outcome'. Access as: transaction.transaction_type
+- currency (string): Transaction currency code. Access as: transaction.currency
+- amount (float): Transaction amount in original currency. Access as: transaction.amount
+- amount_uc (float): Transaction amount in user's default currency. Access as: transaction.amount_uc
+
+IMPORTANT: Transactions are dataclass objects. Use DOT notation (transaction.date), NOT bracket notation (transaction['date']).
 
 *Task*
 You will be given a query in natural language that pertains to a user's financial transactions.
