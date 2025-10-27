@@ -5,7 +5,18 @@ import os
 from dataclasses import dataclass
 from typing import List
 from openai import OpenAI
-import io
+
+# Get API Key from Streamlit Secrets (secure method)
+try:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except:
+    # Fallback for local development
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    if not OPENAI_API_KEY:
+        st.error("⚠️ OpenAI API key not found. Please configure it in Streamlit secrets.")
+        st.stop()
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Page configuration
 st.set_page_config(
@@ -15,6 +26,8 @@ st.set_page_config(
 )
 
 # Initialize session state
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'transaction_list' not in st.session_state:
@@ -39,45 +52,68 @@ PROMPT_CONTEXT_PYTHON = """
 *Introduction*
 We handle personal financial transactions, helping users analyze and gain insights from their data.
 
-Here are the descriptors of each transaction (accessed via dot notation):
-- date (string, YYYY-MM-DD): Transaction date. Access as: transaction.date
-- account (string): Account identifier. Access as: transaction.account
-- category (string): User-defined transaction type. Access as: transaction.category
-- merchant (string): Merchant name. Access as: transaction.merchant
-- transaction_type (string): 'income' or 'outcome'. Access as: transaction.transaction_type
-- currency (string): Transaction currency code. Access as: transaction.currency
-- amount (float): Transaction amount in original currency. Access as: transaction.amount
-- amount_uc (float): Transaction amount in user's default currency. Access as: transaction.amount_uc
+Each transaction is a Python dataclass with these attributes (use DOT notation to access):
+- transaction.date (string, YYYY-MM-DD): Transaction date
+- transaction.account (string): Account identifier (User ID)
+- transaction.category (string): User-defined transaction type (e.g., 'Food', 'Leisure')
+- transaction.merchant (string): Merchant name (e.g., 'AMAZON', 'APPLE')
+- transaction.transaction_type (string): Either 'income' or 'outcome'
+- transaction.currency (string): Currency code (e.g., 'USD', 'EUR', 'GBP')
+- transaction.amount (float): Amount in original currency (non-negative)
+- transaction.amount_uc (float): Amount in user's default currency (non-negative)
 
-IMPORTANT: Transactions are dataclass objects. Use DOT notation (transaction.date), NOT bracket notation (transaction['date']).
+CRITICAL: Access attributes using DOT notation: transaction.date, transaction.amount
+NEVER use bracket notation: transaction['date'] will cause errors!
+
+IMPORTANT: Filter transactions by current user ID: {current_user_id}
+Always filter: user_transactions = [t for t in transaction_list if t.account == '{current_user_id}']
+
+Example correct code:
+```python
+def get_context(transaction_list):
+    import datetime
+    # Filter by current user
+    user_transactions = [t for t in transaction_list if t.account == '{current_user_id}']
+    
+    total = 0
+    for transaction in user_transactions:
+        if transaction.transaction_type == 'outcome':
+            total += transaction.amount_uc
+    return {{'total': total}}
+```
 
 *Task*
-You will be given a query in natural language that pertains to a user's financial transactions.
-Your job is to generate a response in JSON format that contains the following keys:
+Generate a response in JSON format with these keys:
 
-1. "is_relevant": (Boolean) True if the query is about the user's financial transactions, False otherwise.
-2. "needs_diagram": (Boolean) True if the query requires a visual representation.
-3. "context_code": (String) A Python function named `get_context` that processes the `transaction_list` and returns a dictionary containing the necessary context to answer the query.
-4. "algorithm_explanation": (String) A high level explanation of the algorithm from 'context_code' using user's default language '{user_language}'.
-5. "diagram_code": (String) A Python function named `plot` that uses matplotlib/seaborn to create a visualization (only if needs_diagram is True).
+1. "is_relevant": (Boolean) True if query is about financial transactions, False otherwise.
+2. "needs_diagram": (Boolean) True if query requires visualization.
+3. "context_code": (String) Python function named `get_context` that processes transaction_list.
+   - MUST filter by user ID first: [t for t in transaction_list if t.account == '{current_user_id}']
+   - Must use DOT notation to access transaction attributes
+   - Returns a dictionary with necessary context
+4. "algorithm_explanation": (String) High-level explanation in '{user_language}'.
+5. "diagram_code": (String) Python function named `plot` using matplotlib/seaborn (only if needs_diagram is True).
 
 *Input Context*:
+  * Current User ID: {current_user_id}
   * Current date: {latest_date}
-  * Date range for transactions: From {start_date} to {latest_date}
+  * Date range: {start_date} to {latest_date}
   * User's default currency: '{currency}'
   * User's default language: '{user_language}'
-  * User's Unique Categories: {unique_categories}
-  * User's unique currencies: {unique_currencies}
+  * User's Categories: {unique_categories}
+  * User's Currencies: {unique_currencies}
 
 Query: {question}
 
-*Format*:
-- Ensure the code is clean, well-formatted, and efficient.
-- Use function names get_context and plot exactly as specified.
-- Only use datetime and matplotlib/seaborn libraries if needed.
-- If query is irrelevant or asks for dates outside range, return: {{"is_relevant": false,"needs_diagram": false,"context_code": "","algorithm_explanation":"","diagram_code": ""}}
+*Requirements*:
+- ALWAYS filter by user ID first in get_context function
+- Use DOT notation: transaction.date, transaction.amount_uc, etc.
+- Import only: datetime, matplotlib, seaborn (if needed)
+- Function names must be exactly: get_context and plot
+- If query is irrelevant or dates out of range, return:
+  {{"is_relevant": false,"needs_diagram": false,"context_code": "","algorithm_explanation":"","diagram_code": ""}}
 
-Output as JSON string.
+Return valid JSON string.
 """
 
 PROMPT_OUTPUT = """
@@ -104,6 +140,16 @@ PROMPT_OUTPUT = """
   * Provide the final output only.
 """
 
+def load_baseline_dataset():
+    """Load the baseline transaction dataset"""
+    try:
+        # Try to load from file
+        df = pd.read_csv('test_input.csv')
+        return df
+    except FileNotFoundError:
+        st.error("❌ Baseline dataset 'test_input.csv' not found. Please ensure the file is in the same directory as the app.")
+        return None
+
 def df_to_transaction_list(df: pd.DataFrame) -> List[Transaction]:
     """Convert DataFrame to list of Transaction objects"""
     transactions = []
@@ -121,7 +167,7 @@ def df_to_transaction_list(df: pd.DataFrame) -> List[Transaction]:
         transactions.append(transaction)
     return transactions
 
-def run_prompt(client, prompt, system_message, output_format):
+def run_prompt(prompt, system_message, output_format):
     """Call OpenAI API"""
     try:
         if output_format == 'text':
@@ -150,23 +196,30 @@ def run_prompt(client, prompt, system_message, output_format):
         st.error(f"API Error: {str(e)}")
         return None
 
-def process_question(client, question, transaction_list, local_info):
+def process_question(question, transaction_list, local_info, current_user_id):
     """Process user question and generate response"""
     
-    # Extract metadata
-    unique_categories = str(set(t.category for t in transaction_list))
-    unique_currencies = str(set(t.currency for t in transaction_list))
+    # Filter transactions for current user only
+    user_transactions = [t for t in transaction_list if t.account == current_user_id]
+    
+    if not user_transactions:
+        return f"No transactions found for user ID: {current_user_id}", None, None
+    
+    # Extract metadata from user's transactions only
+    unique_categories = str(set(t.category for t in user_transactions))
+    unique_currencies = str(set(t.currency for t in user_transactions))
     
     # Generate code
     system_message = "You are a helpful assistant that generates Python code for financial data analysis."
     full_prompt = PROMPT_CONTEXT_PYTHON.format(
         question=question,
+        current_user_id=current_user_id,
         unique_categories=unique_categories,
         unique_currencies=unique_currencies,
         **local_info
     )
     
-    code_response = run_prompt(client, full_prompt, system_message, 'json')
+    code_response = run_prompt(full_prompt, system_message, 'json')
     if not code_response:
         return None, None, None
     
@@ -187,6 +240,7 @@ def process_question(client, question, transaction_list, local_info):
         context = get_context(transaction_list)
     except Exception as e:
         st.error(f"Error executing generated code: {str(e)}")
+        st.code(code_dict['context_code'])
         return None, None, None
     
     # Generate natural language output
@@ -197,7 +251,7 @@ def process_question(client, question, transaction_list, local_info):
         **local_info
     )
     
-    output = run_prompt(client, output_prompt, system_message, 'text')
+    output = run_prompt(output_prompt, system_message, 'text')
     
     # Handle diagram if needed
     diagram = None
@@ -210,73 +264,93 @@ def process_question(client, question, transaction_list, local_info):
     
     return output, context, diagram
 
-# Sidebar for configuration
-with st.sidebar:
-    st.title("⚙️ Configuration")
+# Authentication/Setup Page
+if not st.session_state.authenticated:
+    st.title("💰 Financial AI Assistant")
+    st.markdown("### Welcome! Please enter your details to get started")
     
-    # API Key input
-    api_key = st.text_input("OpenAI API Key", type="password", help="Enter your OpenAI API key")
+    with st.form("user_setup"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            user_id = st.text_input(
+                "User ID *",
+                value="d3f6dc6d-badb-4b8f-ae52-db4185c622f7",
+                help="Your unique user identifier"
+            )
+            language = st.selectbox(
+                "Language *",
+                ["ENG", "RUS", "GEO"],
+                index=0
+            )
+        
+        with col2:
+            country = st.selectbox(
+                "Country *",
+                ["USA", "GEO", "RUS", "GBR", "EUR"],
+                index=0
+            )
+            currency = st.selectbox(
+                "Default Currency *",
+                ["USD", "GEL", "EUR", "GBP"],
+                index=0
+            )
+        
+        submitted = st.form_submit_button("Start Chatting", use_container_width=True)
+        
+        if submitted:
+            if user_id:
+                # Load baseline dataset
+                with st.spinner("Loading transaction data..."):
+                    df = load_baseline_dataset()
+                    
+                    if df is not None:
+                        st.session_state.transaction_list = df_to_transaction_list(df)
+                        
+                        # Check if user exists in dataset
+                        user_transactions = [t for t in st.session_state.transaction_list if t.account == user_id]
+                        
+                        if not user_transactions:
+                            st.error(f"❌ User ID '{user_id}' not found in the dataset. Please check your ID.")
+                        else:
+                            # Extract date range from user's transactions
+                            dates = [t.date for t in user_transactions]
+                            start_date = min(dates)
+                            latest_date = max(dates)
+                            
+                            st.session_state.local_info = {
+                                'user_language': language,
+                                'user_country': country,
+                                'currency': currency,
+                                'start_date': start_date,
+                                'latest_date': latest_date
+                            }
+                            st.session_state.user_id = user_id
+                            st.session_state.authenticated = True
+                            st.rerun()
+            else:
+                st.error("Please enter your User ID")
+
+# Main Chat Interface
+else:
+    # Header with user info
+    col1, col2, col3 = st.columns([3, 1, 1])
+    with col1:
+        st.title("💰 Financial AI Assistant")
+    with col2:
+        st.metric("User", st.session_state.user_id[:8] + "...")
+    with col3:
+        if st.button("🔄 Change User", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.messages = []
+            st.rerun()
+    
+    # Display transaction info
+    user_transactions = [t for t in st.session_state.transaction_list if t.account == st.session_state.user_id]
+    st.info(f"📊 Loaded {len(user_transactions)} transactions | 📅 {st.session_state.local_info['start_date']} to {st.session_state.local_info['latest_date']} | 💱 {st.session_state.local_info['currency']}")
     
     st.divider()
     
-    # File upload
-    st.subheader("📁 Upload Transaction Data")
-    uploaded_file = st.file_uploader(
-        "Upload CSV file",
-        type=['csv'],
-        help="CSV should contain: date, account, category, merchant, transaction_type, currency, amount, amount_uc"
-    )
-    
-    # User settings
-    st.subheader("🌍 User Settings")
-    user_language = st.selectbox("Language", ["ENG", "RUS", "GEO"], index=0)
-    user_country = st.selectbox("Country", ["USA", "GEO", "RUS"], index=0)
-    currency = st.selectbox("Default Currency", ["USD", "GEL", "EUR", "GBP"], index=0)
-    
-    if uploaded_file and st.button("Load Data"):
-        try:
-            df = pd.read_csv(uploaded_file)
-            st.session_state.transaction_list = df_to_transaction_list(df)
-            
-            # Extract date range
-            dates = [t.date for t in st.session_state.transaction_list]
-            start_date = min(dates)
-            latest_date = max(dates)
-            
-            st.session_state.local_info = {
-                'user_language': user_language,
-                'user_country': user_country,
-                'currency': currency,
-                'start_date': start_date,
-                'latest_date': latest_date
-            }
-            
-            st.success(f"✅ Loaded {len(st.session_state.transaction_list)} transactions")
-            st.info(f"Date range: {start_date} to {latest_date}")
-        except Exception as e:
-            st.error(f"Error loading file: {str(e)}")
-
-# Main content
-st.title("💰 Financial AI Assistant")
-st.markdown("Ask questions about your financial transactions in natural language!")
-
-# Check if data is loaded
-if st.session_state.transaction_list is None:
-    st.info("👈 Please upload your transaction data in the sidebar to get started.")
-    st.markdown("""
-    ### How to use:
-    1. Enter your OpenAI API key in the sidebar
-    2. Upload a CSV file with your transactions
-    3. Configure your preferences (language, currency, etc.)
-    4. Start asking questions!
-    
-    ### Example questions:
-    - "How much did I spend in December?"
-    - "Show me my largest expenses last month"
-    - "What are my top spending categories?"
-    - "Did I spend more on food or entertainment?"
-    """)
-else:
     # Chat interface
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -287,50 +361,46 @@ else:
     
     # Chat input
     if prompt := st.chat_input("Ask about your transactions..."):
-        if not api_key:
-            st.error("Please enter your OpenAI API key in the sidebar!")
-        else:
-            # Add user message
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            
-            # Generate response
-            with st.chat_message("assistant"):
-                with st.spinner("Analyzing..."):
-                    client = OpenAI(api_key=api_key)
-                    response, context, diagram = process_question(
-                        client,
-                        prompt,
-                        st.session_state.transaction_list,
-                        st.session_state.local_info
-                    )
+        # Add user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Generate response
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing your transactions..."):
+                response, context, diagram = process_question(
+                    prompt,
+                    st.session_state.transaction_list,
+                    st.session_state.local_info,
+                    st.session_state.user_id
+                )
+                
+                if response:
+                    st.markdown(response)
                     
-                    if response:
-                        st.markdown(response)
-                        
-                        # Show context in expander
-                        if context:
-                            with st.expander("📊 See context data"):
-                                st.json(context)
-                        
-                        # Show diagram if available
-                        if diagram:
-                            st.pyplot(diagram)
-                        
-                        # Save to chat history
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": response,
-                            "context": context
-                        })
-                    else:
-                        st.error("Failed to generate response. Please try again.")
+                    # Show context in expander
+                    if context:
+                        with st.expander("📊 See context data"):
+                            st.json(context)
+                    
+                    # Show diagram if available
+                    if diagram:
+                        st.pyplot(diagram)
+                    
+                    # Save to chat history
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response,
+                        "context": context
+                    })
+                else:
+                    st.error("Failed to generate response. Please try again.")
 
 # Footer
 st.divider()
 st.markdown("""
 <div style='text-align: center; color: gray;'>
-    <small>Built with Streamlit & OpenAI | Your data is processed locally and not stored</small>
+    <small>Built with Streamlit & OpenAI | Analyzing your personal financial data</small>
 </div>
 """, unsafe_allow_html=True)
