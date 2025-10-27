@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass
 from typing import List
 from openai import OpenAI
+import plotly.graph_objects as go
+import plotly.express as px
 
 # Get API Key from Streamlit Secrets (secure method)
 try:
@@ -86,13 +88,27 @@ def get_context(transaction_list):
 Generate a response in JSON format with these keys:
 
 1. "is_relevant": (Boolean) True if query is about financial transactions, False otherwise.
-2. "needs_diagram": (Boolean) True if query requires visualization.
+2. "needs_diagram": (Boolean) True if query requires visualization (comparisons, trends over time).
 3. "context_code": (String) Python function named `get_context` that processes transaction_list.
    - MUST filter by user ID first: [t for t in transaction_list if t.account == '{current_user_id}']
    - Must use DOT notation to access transaction attributes
    - Returns a dictionary with necessary context
 4. "algorithm_explanation": (String) High-level explanation in '{user_language}'.
-5. "diagram_code": (String) Python function named `plot` using matplotlib/seaborn (only if needs_diagram is True).
+5. "diagram_code": (String) ONLY if needs_diagram is True. Python function named `plot` that:
+   - Takes context dictionary as parameter
+   - Uses matplotlib.pyplot (imported as plt)
+   - Creates and returns a figure object
+   - Example:
+   ```python
+   def plot(context):
+       import matplotlib.pyplot as plt
+       fig, ax = plt.subplots(figsize=(10, 6))
+       ax.bar(context['labels'], context['values'])
+       ax.set_title('Title')
+       ax.set_xlabel('X Label')
+       ax.set_ylabel('Y Label')
+       return fig
+   ```
 
 *Input Context*:
   * Current User ID: {current_user_id}
@@ -108,7 +124,8 @@ Query: {question}
 *Requirements*:
 - ALWAYS filter by user ID first in get_context function
 - Use DOT notation: transaction.date, transaction.amount_uc, etc.
-- Import only: datetime, matplotlib, seaborn (if needed)
+- For plotting: use matplotlib.pyplot, create figure with plt.subplots(), return fig
+- Import only: datetime, matplotlib.pyplot (if needed)
 - Function names must be exactly: get_context and plot
 - If query is irrelevant or dates out of range, return:
   {{"is_relevant": false,"needs_diagram": false,"context_code": "","algorithm_explanation":"","diagram_code": ""}}
@@ -240,7 +257,8 @@ def process_question(question, transaction_list, local_info, current_user_id):
         context = get_context(transaction_list)
     except Exception as e:
         st.error(f"Error executing generated code: {str(e)}")
-        st.code(code_dict['context_code'])
+        with st.expander("🐛 See generated code"):
+            st.code(code_dict['context_code'])
         return None, None, None
     
     # Generate natural language output
@@ -254,15 +272,17 @@ def process_question(question, transaction_list, local_info, current_user_id):
     output = run_prompt(output_prompt, system_message, 'text')
     
     # Handle diagram if needed
-    diagram = None
+    fig = None
     if code_dict.get('needs_diagram', False) and code_dict.get('diagram_code'):
         try:
             exec(code_dict['diagram_code'], globals())
-            diagram = plot(context)
+            fig = plot(context)
         except Exception as e:
             st.warning(f"Could not generate diagram: {str(e)}")
+            with st.expander("🐛 See diagram code"):
+                st.code(code_dict.get('diagram_code', 'No code generated'))
     
-    return output, context, diagram
+    return output, context, fig
 
 # Authentication/Setup Page
 if not st.session_state.authenticated:
@@ -358,6 +378,8 @@ else:
             if "context" in message and message["context"]:
                 with st.expander("📊 See context data"):
                     st.json(message["context"])
+            if "figure" in message and message["figure"]:
+                st.pyplot(message["figure"])
     
     # Chat input
     if prompt := st.chat_input("Ask about your transactions..."):
@@ -369,7 +391,7 @@ else:
         # Generate response
         with st.chat_message("assistant"):
             with st.spinner("Analyzing your transactions..."):
-                response, context, diagram = process_question(
+                response, context, fig = process_question(
                     prompt,
                     st.session_state.transaction_list,
                     st.session_state.local_info,
@@ -385,14 +407,15 @@ else:
                             st.json(context)
                     
                     # Show diagram if available
-                    if diagram:
-                        st.pyplot(diagram)
+                    if fig:
+                        st.pyplot(fig)
                     
                     # Save to chat history
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": response,
-                        "context": context
+                        "context": context,
+                        "figure": fig
                     })
                 else:
                     st.error("Failed to generate response. Please try again.")
