@@ -92,21 +92,43 @@ Generate a response in JSON format with these keys:
 3. "context_code": (String) Python function named `get_context` that processes transaction_list.
    - MUST filter by user ID first: [t for t in transaction_list if t.account == '{current_user_id}']
    - Must use DOT notation to access transaction attributes
-   - Returns a dictionary with necessary context
+   - Returns a dictionary with necessary context for answering AND for plotting
+   - For plots, include data as lists: {{'labels': ['Dec', 'Jan'], 'values': [1000, 800]}}
 4. "algorithm_explanation": (String) High-level explanation in '{user_language}'.
 5. "diagram_code": (String) ONLY if needs_diagram is True. Python function named `plot` that:
    - Takes context dictionary as parameter
-   - Uses matplotlib.pyplot (imported as plt)
-   - Creates and returns a figure object
-   - Example:
+   - Uses ONLY plotly.express (import as px) or plotly.graph_objects (import as go)
+   - NEVER use matplotlib or seaborn
+   - Creates and returns a plotly figure object
+   - Common chart types:
+     * Bar chart: px.bar(x=context['labels'], y=context['values'], title='Title')
+     * Line chart: px.line(x=context['dates'], y=context['amounts'], title='Title')
+     * Pie chart: px.pie(values=context['values'], names=context['labels'], title='Title')
+   - Example bar chart:
    ```python
    def plot(context):
-       import matplotlib.pyplot as plt
-       fig, ax = plt.subplots(figsize=(10, 6))
-       ax.bar(context['labels'], context['values'])
-       ax.set_title('Title')
-       ax.set_xlabel('X Label')
-       ax.set_ylabel('Y Label')
+       import plotly.express as px
+       fig = px.bar(
+           x=context['labels'], 
+           y=context['values'],
+           title='Spending Comparison',
+           labels={{'x': 'Month', 'y': 'Amount'}}
+       )
+       return fig
+   ```
+   - Example with graph_objects:
+   ```python
+   def plot(context):
+       import plotly.graph_objects as go
+       fig = go.Figure(data=[
+           go.Bar(x=context['labels'], y=context['values'], marker_color='lightblue')
+       ])
+       fig.update_layout(
+           title='Spending by Category',
+           xaxis_title='Category',
+           yaxis_title='Amount',
+           template='plotly_white'
+       )
        return fig
    ```
 
@@ -121,16 +143,18 @@ Generate a response in JSON format with these keys:
 
 Query: {question}
 
-*Requirements*:
+*CRITICAL Requirements*:
 - ALWAYS filter by user ID first in get_context function
 - Use DOT notation: transaction.date, transaction.amount_uc, etc.
-- For plotting: use matplotlib.pyplot, create figure with plt.subplots(), return fig
-- Import only: datetime, matplotlib.pyplot (if needed)
+- For plotting: ONLY use plotly.express or plotly.graph_objects
+- NEVER import or use matplotlib, seaborn, or pyplot
+- Import only: datetime, plotly.express as px, plotly.graph_objects as go (if needed)
 - Function names must be exactly: get_context and plot
+- The plot function MUST return a plotly figure object
 - If query is irrelevant or dates out of range, return:
   {{"is_relevant": false,"needs_diagram": false,"context_code": "","algorithm_explanation":"","diagram_code": ""}}
 
-Return valid JSON string.
+Return valid JSON string. Remember: Use ONLY Plotly for charts, NEVER matplotlib!
 """
 
 PROMPT_OUTPUT = """
@@ -379,7 +403,7 @@ else:
                 with st.expander("📊 See context data"):
                     st.json(message["context"])
             if "figure" in message and message["figure"]:
-                st.pyplot(message["figure"])
+                st.plotly_chart(message["figure"], use_container_width=True)
     
     # Chat input
     if prompt := st.chat_input("Ask about your transactions..."):
@@ -408,7 +432,7 @@ else:
                     
                     # Show diagram if available
                     if fig:
-                        st.pyplot(fig)
+                        st.plotly_chart(fig, use_container_width=True)
                     
                     # Save to chat history
                     st.session_state.messages.append({
