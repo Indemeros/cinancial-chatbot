@@ -310,103 +310,136 @@ def process_question(question, transaction_list, local_info, current_user_id):
 
 # Authentication/Setup Page
 if not st.session_state.authenticated:
-    st.title("💰 Financial AI Assistant")
-    st.markdown("### Welcome! Please enter your details to get started")
+    # Center the form
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    with st.form("user_setup"):
-        col1, col2 = st.columns(2)
+    with col2:
+        st.title("💰 Financial AI Assistant")
+        st.markdown("### Welcome! Please enter your details to get started")
+        st.markdown("---")
         
-        with col1:
+        with st.form("user_setup"):
             user_id = st.text_input(
-                "User ID *",
+                "User ID",
                 value="d3f6dc6d-badb-4b8f-ae52-db4185c622f7",
                 help="Your unique user identifier"
             )
+            
             language = st.selectbox(
-                "Language *",
+                "Language",
                 ["ENG", "RUS", "GEO"],
-                index=0
+                index=1
             )
-        
-        with col2:
+            
             country = st.selectbox(
-                "Country *",
+                "Country",
                 ["USA", "GEO", "RUS", "GBR", "EUR"],
-                index=0
+                index=1
             )
+            
             currency = st.selectbox(
-                "Default Currency *",
+                "Default Currency",
                 ["USD", "GEL", "EUR", "GBP"],
-                index=0
+                index=1
             )
-        
-        submitted = st.form_submit_button("Start Chatting", use_container_width=True)
-        
-        if submitted:
-            if user_id:
-                # Load baseline dataset
-                with st.spinner("Loading transaction data..."):
-                    df = load_baseline_dataset()
-                    
-                    if df is not None:
-                        st.session_state.transaction_list = df_to_transaction_list(df)
+            
+            st.markdown("")
+            submitted = st.form_submit_button("Start Chatting →", use_container_width=True, type="primary")
+            
+            if submitted:
+                if user_id:
+                    # Load baseline dataset
+                    with st.spinner("Loading transaction data..."):
+                        df = load_baseline_dataset()
                         
-                        # Check if user exists in dataset
-                        user_transactions = [t for t in st.session_state.transaction_list if t.account == user_id]
-                        
-                        if not user_transactions:
-                            st.error(f"❌ User ID '{user_id}' not found in the dataset. Please check your ID.")
-                        else:
-                            # Extract date range from user's transactions
-                            dates = [t.date for t in user_transactions]
-                            start_date = min(dates)
-                            latest_date = max(dates)
+                        if df is not None:
+                            st.session_state.transaction_list = df_to_transaction_list(df)
                             
-                            st.session_state.local_info = {
-                                'user_language': language,
-                                'user_country': country,
-                                'currency': currency,
-                                'start_date': start_date,
-                                'latest_date': latest_date
-                            }
-                            st.session_state.user_id = user_id
-                            st.session_state.authenticated = True
-                            st.rerun()
-            else:
-                st.error("Please enter your User ID")
+                            # Check if user exists in dataset
+                            user_transactions = [t for t in st.session_state.transaction_list if t.account == user_id]
+                            
+                            if not user_transactions:
+                                st.error(f"❌ User ID '{user_id}' not found in the dataset. Please check your ID.")
+                            else:
+                                # Extract date range from user's transactions
+                                dates = [t.date for t in user_transactions]
+                                start_date = min(dates)
+                                latest_date = max(dates)
+                                
+                                st.session_state.local_info = {
+                                    'user_language': language,
+                                    'user_country': country,
+                                    'currency': currency,
+                                    'start_date': start_date,
+                                    'latest_date': latest_date
+                                }
+                                st.session_state.user_id = user_id
+                                st.session_state.authenticated = True
+                                st.rerun()
+                else:
+                    st.error("Please enter your User ID")
 
 # Main Chat Interface
 else:
-    # Header with user info
-    col1, col2, col3 = st.columns([3, 1, 1])
-    with col1:
-        st.title("💰 Financial AI Assistant")
-    with col2:
-        st.metric("User", st.session_state.user_id[:8] + "...")
-    with col3:
-        if st.button("🔄 Change User", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.messages = []
+    # Check if conversation started
+    conversation_started = len(st.session_state.messages) > 0
+    
+    if not conversation_started:
+        # Welcome screen - centered
+        st.markdown("<br><br><br>", unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col2:
+            st.markdown("<h1 style='text-align: center;'>💰 Financial AI Assistant</h1>", unsafe_allow_html=True)
+            st.markdown("<p style='text-align: center; font-size: 1.2em; color: #666;'>Ask me anything about your financial transactions</p>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Show quick stats in a compact way
+            user_transactions = [t for t in st.session_state.transaction_list if t.account == st.session_state.user_id]
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.metric("📊 Transactions", len(user_transactions))
+            with col_b:
+                st.metric("📅 Period", f"{st.session_state.local_info['start_date'][:7]} - {st.session_state.local_info['latest_date'][:7]}")
+            with col_c:
+                st.metric("💱 Currency", st.session_state.local_info['currency'])
+        
+        # Center the input
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col2:
+            prompt = st.chat_input("Ask about your transactions...", key="centered_input")
+    else:
+        # Conversation started - compact header, input at bottom
+        col1, col2, col3 = st.columns([3, 1, 1])
+        with col1:
+            st.title("💰 Financial AI Assistant")
+        with col3:
+            if st.button("🔄 New Session", use_container_width=True):
+                st.session_state.messages = []
+                st.rerun()
+        
+        st.divider()
+        
+        # Display chat history
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                if "context" in message and message["context"]:
+                    with st.expander("📊 See context data"):
+                        st.json(message["context"])
+                if "figure" in message and message["figure"]:
+                    st.plotly_chart(message["figure"], use_container_width=True)
+        
+        # Input at bottom
+        prompt = st.chat_input("Ask about your transactions...")
+    
+    # Process prompt
+    if prompt:
+        # If first message, clear welcome screen
+        if not conversation_started:
             st.rerun()
-    
-    # Display transaction info
-    user_transactions = [t for t in st.session_state.transaction_list if t.account == st.session_state.user_id]
-    st.info(f"📊 Loaded {len(user_transactions)} transactions | 📅 {st.session_state.local_info['start_date']} to {st.session_state.local_info['latest_date']} | 💱 {st.session_state.local_info['currency']}")
-    
-    st.divider()
-    
-    # Chat interface
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if "context" in message and message["context"]:
-                with st.expander("📊 See context data"):
-                    st.json(message["context"])
-            if "figure" in message and message["figure"]:
-                st.plotly_chart(message["figure"], use_container_width=True)
-    
-    # Chat input
-    if prompt := st.chat_input("Ask about your transactions..."):
+        
         # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
