@@ -7,6 +7,7 @@ from typing import List
 from openai import OpenAI
 import plotly.graph_objects as go
 import plotly.express as px
+from simple_kg_helper import SimpleKGHelper
 
 # Get API Key from Streamlit Secrets (secure method)
 try:
@@ -375,6 +376,20 @@ if not st.session_state.authenticated:
             else:
                 st.error("Please enter your User ID")
 
+# Initialize KG helper
+if 'kg' not in st.session_state:
+    try:
+        st.session_state.kg = SimpleKGHelper(
+            uri=st.secrets["neo4j"]["uri"],
+            user=st.secrets["neo4j"]["username"],
+            password=st.secrets["neo4j"]["password"],
+            openai_client=client
+        )
+        st.success("✅ Knowledge Graph ready")
+    except Exception as e:
+        st.warning(f"⚠️ KG not available: {e}")
+        st.session_state.kg = None
+
 # Main Chat Interface
 else:
     # Header with user info
@@ -415,12 +430,39 @@ else:
         # Generate response
         with st.chat_message("assistant"):
             with st.spinner("Analyzing your transactions..."):
-                response, context, fig = process_question(
-                    prompt,
-                    st.session_state.transaction_list,
-                    st.session_state.local_info,
-                    st.session_state.user_id
-                )
+                # Smart routing: KG for complex, simple for basic
+                if st.session_state.kg and st.session_state.kg.should_use_kg(prompt):
+                    st.caption("🔍 Using Knowledge Graph")
+                    
+                    kg_data = st.session_state.kg.query_kg(
+                        question=prompt,
+                        user_id=st.session_state.user_id,
+                        currency=st.session_state.local_info['currency']
+                    )
+                    
+                    if kg_data:
+                        response = st.session_state.kg.format_kg_results(
+                            kg_data, prompt,
+                            st.session_state.local_info['user_language'],
+                            st.session_state.local_info['currency']
+                        )
+                        context = kg_data
+                        fig = None
+                        
+                        with st.expander("🔧 See Cypher Query"):
+                            st.code(kg_data['cypher'], language='cypher')
+                    else:
+                        st.caption("🔄 Falling back to in-memory")
+                        response, context, fig = process_question(
+                            prompt, st.session_state.transaction_list,
+                            st.session_state.local_info, st.session_state.user_id
+                        )
+                else:
+                    st.caption("🔍 Using In-Memory Processing")
+                    response, context, fig = process_question(
+                        prompt, st.session_state.transaction_list,
+                        st.session_state.local_info, st.session_state.user_id
+                    )
                 
                 if response:
                     st.markdown(response)
