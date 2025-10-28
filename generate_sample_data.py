@@ -23,16 +23,6 @@ class SimpleKGHelper:
         """
         Decide if question needs KG or can use simple processing
         """
-        question_lower = question.lower()
-        
-        # Keywords that indicate KG is needed
-        kg_keywords = [
-            'сравни', 'compare', 'vs', 'versus',  # Comparisons
-            'топ', 'top', 'больше всего', 'most',  # Rankings
-            'часто', 'обычно', 'предпочитаю', 'often', 'usually'  # Patterns
-        ]
-        
-        return any(keyword in question_lower for keyword in kg_keywords)
     
     def query_kg(self, question: str, user_id: str, currency: str) -> dict:
         """
