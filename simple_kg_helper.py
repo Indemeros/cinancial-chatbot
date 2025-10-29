@@ -68,6 +68,14 @@ Return JSON: {{"use_kg": true, "reasoning": "..."}} or {{"use_kg": false, "reaso
         """Generate Cypher and query Neo4j with NEW SCHEMA"""
         
         cypher_prompt = f"""
+⚠️⚠️⚠️ CRITICAL SCHEMA WARNING ⚠️⚠️⚠️
+THIS SCHEMA HAS CHANGED! DO NOT USE OLD PATTERNS!
+- NO Account nodes exist
+- NO from_account properties exist  
+- NO [:FROM_ACCOUNT] relationships exist
+- NO [:MADE_AT] relationships exist
+ONLY use the exact relationships listed below!
+
 **Introduction**
 You are an expert Cypher query generator for Neo4j graph database. Your task is to convert natural language questions about financial transactions into accurate, efficient Cypher queries.
 
@@ -91,19 +99,26 @@ Nodes:
    - User-defined spending categories (e.g., 'Продукты', 'Кафе и рестораны', 'Такси')
    - Has parent-child hierarchy for grouping
 
-Relationships (use EXACT names):
-- (User)-[:MADE_TRANSACTION]->(Transaction)
-- (Transaction)-[:AT_MERCHANT]->(Merchant)
-- (Transaction)-[:IN_CATEGORY]->(Category)
+Relationships (use EXACT names - DO NOT USE ANY OTHER NAMES):
+- (User)-[:MADE_TRANSACTION]->(Transaction)  ⚠️ NOT [:FROM_ACCOUNT], NOT [:MADE_BY]
+- (Transaction)-[:AT_MERCHANT]->(Merchant)  ⚠️ NOT [:MADE_AT], NOT [:TO_MERCHANT]
+- (Transaction)-[:IN_CATEGORY]->(Category)  ⚠️ NOT [:BELONGS_TO] for transactions
 - (Merchant)-[:BELONGS_TO]->(Category)
 - (Category)-[:BELONGS_TO]->(Category) [for hierarchy - child to parent]
+
+⚠️ CRITICAL: There is NO Account node. There is NO from_account property. ONLY use User node!
 
 **CRITICAL RULES - READ CAREFULLY**
 
 1. USER FILTERING (MANDATORY):
-   - CORRECT: MATCH (u:User {{id: $user_id}})-[:MADE_TRANSACTION]->(t:Transaction)
-   - ALWAYS start with User node and traverse to transactions
-   - Every query MUST include user filtering
+   - ⚠️ THERE IS NO ACCOUNT NODE IN THIS SCHEMA
+   - ⚠️ THERE IS NO from_account OR account_id PROPERTY
+   - ⚠️ DO NOT USE [:FROM_ACCOUNT] - IT DOES NOT EXIST
+   - CORRECT PATTERN: MATCH (u:User {{id: $user_id}})-[:MADE_TRANSACTION]->(t:Transaction)
+   - WRONG: (t:Transaction)-[:FROM_ACCOUNT]->(a:Account)
+   - WRONG: WHERE t.account_id = $user_id
+   - WRONG: WHERE t.from_account = $user_id
+   - Every query MUST start with User node and traverse via MADE_TRANSACTION
 
 2. PROPERTY NAMES:
    - Use toFloat(t.amount_uc) for monetary totals (user's default currency)
@@ -137,6 +152,9 @@ Relationships (use EXACT names):
 7. MERCHANT RELATIONSHIPS:
    - Merchants are linked to categories: (m:Merchant)-[:BELONGS_TO]->(c:Category)
    - You can navigate from Transaction to Merchant to Category
+   - IMPORTANT: To filter by transaction category, use (t)-[:IN_CATEGORY]->(c:Category)
+   - To filter by merchant's typical category, use (m)-[:BELONGS_TO]->(c:Category)
+   - Most queries about "spending in category X" should filter transactions, not merchants!
 
 8. CATEGORY HIERARCHY:
    - Parent categories exist (e.g., 'Еда и напитки' contains 'Продукты', 'Кафе и рестораны')
@@ -153,6 +171,10 @@ Relationships (use EXACT names):
 - Current User ID: {user_id}
 - User's Default Currency: {currency}
 - Question: "{question}"
+
+⚠️ SCHEMA REMINDER: Start EVERY query with:
+MATCH (u:User {{id: $user_id}})-[:MADE_TRANSACTION]->(t:Transaction)
+Then continue with -[:AT_MERCHANT]->(m:Merchant) or -[:IN_CATEGORY]->(c:Category) as needed.
 
 **Task**
 Generate a Cypher query that:
@@ -206,6 +228,14 @@ Example 4: "Все мои расходы на еду" (using parent category)
   }}
 }}
 
+Example 5: "Топ 5 магазинов в категории Продукты" (merchants for specific transaction category)
+{{
+  "cypher": "MATCH (u:User {{id: $user_id}})-[:MADE_TRANSACTION]->(t:Transaction)-[:AT_MERCHANT]->(m:Merchant) MATCH (t)-[:IN_CATEGORY]->(c:Category {{name: 'Продукты'}}) WHERE t.transaction_type = 'outcome' RETURN m.name AS merchant, sum(toFloat(t.amount_uc)) AS total_spent, count(t) AS visits ORDER BY total_spent DESC LIMIT 5",
+  "parameters": {{
+    "user_id": "{user_id}"
+  }}
+}}
+
 **Important Reminders**
 - ALWAYS start with User node and filter by user_id
 - Use toFloat() for amount and amount_uc in calculations
@@ -222,7 +252,7 @@ Now generate the Cypher query for the question above.
             response = self.openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a Cypher expert. Return only valid JSON."},
+                    {"role": "system", "content": "You are a Cypher expert for Neo4j. CRITICAL: This graph has User nodes (NOT Account nodes). Relationships are [:MADE_TRANSACTION], [:AT_MERCHANT], [:IN_CATEGORY]. NO [:FROM_ACCOUNT] or [:MADE_AT] relationships exist. Always start queries with (u:User {id: $user_id})-[:MADE_TRANSACTION]->(t:Transaction). Return only valid JSON."},
                     {"role": "user", "content": cypher_prompt}
                 ],
                 temperature=0,
