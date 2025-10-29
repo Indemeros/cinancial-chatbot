@@ -67,6 +67,17 @@ Return JSON: {{"use_kg": true, "reasoning": "..."}} or {{"use_kg": false, "reaso
     def query_kg(self, question, user_id, currency):
         """Generate Cypher and query Neo4j with NEW SCHEMA"""
         
+        # Map UUID to Neo4j user ID
+        uuid_to_user_id = {
+            '34894ece-9ae4-4522-a5e0-21d3b8f6232c': 'user1',
+            '7487ccf8-c480-4c49-b20c-ba3c8d21a4bb': 'user2',
+            '96485aa1-ccef-4423-a709-8ba56f3ae844': 'user3',
+            'd3f6dc6d-badb-4b8f-ae52-db4185c622f7': 'user4'
+        }
+        
+        # Convert UUID to user_id if needed
+        neo4j_user_id = uuid_to_user_id.get(user_id, user_id)
+        
         cypher_prompt = f"""
 ⚠️⚠️⚠️ CRITICAL SCHEMA WARNING ⚠️⚠️⚠️
 THIS SCHEMA HAS CHANGED! DO NOT USE OLD PATTERNS!
@@ -168,7 +179,7 @@ Relationships (use EXACT names - DO NOT USE ANY OTHER NAMES):
    - Return only necessary columns
 
 **Input Context**
-- Current User ID: {user_id}
+- Current User ID: {neo4j_user_id}
 - User's Default Currency: {currency}
 - Question: "{question}"
 
@@ -190,7 +201,7 @@ Return ONLY valid JSON (no markdown, no explanations):
 {{
   "cypher": "MATCH (u:User {{id: $user_id}})-[:MADE_TRANSACTION]->(t:Transaction) ...",
   "parameters": {{
-    "user_id": "{user_id}"
+    "user_id": "{neo4j_user_id}"
   }}
 }}
 
@@ -261,7 +272,7 @@ Now generate the Cypher query for the question above.
             
             result = json.loads(response.choices[0].message.content)
             cypher = result.get('cypher')
-            parameters = result.get('parameters', {'user_id': user_id})
+            parameters = result.get('parameters', {'user_id': neo4j_user_id})
             
             if not cypher:
                 st.error("No Cypher query generated")
